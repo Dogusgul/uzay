@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Uzay Keşfi – Gezegenlere İniş</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" class="overlay top-left"></div>
+    <div id="hint" class="overlay bottom-left"></div>
+    
+    <!-- Touch Controls (shown on mobile) -->
+    <div id="touch-controls" class="touch-controls hidden" aria-hidden="true">
+      <div class="tc-left">
+        <div id="joy" class="joy">
+          <div id="joy-knob" class="joy-knob"></div>
+        </div>
+      </div>
+      <div class="tc-right">
+        <button id="btn-fire" class="tc-btn primary" aria-label="Ateş (Space)">🔥</button>
+        <div class="tc-right-row">
+          <button id="btn-interact" class="tc-btn" aria-label="Etkileşim (E)">E</button>
+          <button id="btn-context" class="tc-btn" aria-label="İniş/Kalkış (L)">L</button>
+          <button id="btn-menu" class="tc-btn" aria-label="Menu (M)">M</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="menu" aria-hidden="true" class="menu hidden">
+      <div class="menu-inner">
+        <div class="menu-header">
+          <div class="menu-title">Kontrol Paneli (M ile kapat)</div>
+        </div>
+        <div id="menu-content" class="menu-content"></div>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+  </html>

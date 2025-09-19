@@ -83,6 +83,7 @@
   }
 
   // Guardian drones patrol selected planets
+  const drones = [];
   for (let i = 1; i < planets.length; i += 3) {
     if (planets[i]) drones.push(createDrone(i));
   }
@@ -118,7 +119,6 @@
     r: 12,
   };
 
-  const drones = [];
   const enemyShots = [];
   const trailPoints = [];
   let trailTimer = 0;

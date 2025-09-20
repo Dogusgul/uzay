@@ -84,8 +84,14 @@
 
   // Guardian drones patrol selected planets
   const drones = [];
+  const droneBlueprints = [];
   for (let i = 1; i < planets.length; i += 3) {
-    if (planets[i]) drones.push(createDrone(i));
+    if (!planets[i]) continue;
+    const drone = createDrone(i);
+    if (drone) {
+      drones.push(drone);
+      droneBlueprints.push({ planetIndex: i, angle: drone.spawnAngle, orbit: drone.orbit });
+    }
   }
 
   const stars = Array.from({ length: 520 }, () => ({
@@ -111,13 +117,18 @@
 
   // Ship
   const ship = {
-    x: planets[0].x + planets[0].r + 160,
-    y: planets[0].y,
+    x: 0,
+    y: 0,
     vx: 0,
     vy: 0,
-    angle: Math.PI, // facing left initially
+    angle: 0,
     r: 12,
   };
+
+  const explosionParticles = [];
+  let shipDestroyed = false;
+  let respawnTimer = 0;
+  const respawnDelay = 3.2;
 
   const enemyShots = [];
   const trailPoints = [];
@@ -213,8 +224,11 @@
 
   // Overheat
   let heat = 0; // 0..1
-  const heatPerShot = 1/6; // 6. atışta dolar
-  const heatCoolRate = 0.22; // per second
+  const heatPerShot = 1 / 6; // 6. atışta dolar
+  const heatCoolRate = 0.22; // normal soğuma
+  const overheatDuration = 6; // saniye
+  let overheated = false;
+  let overheatTimer = 0;
 
   // Touch controls setup
   const isTouchLike = (('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches));
@@ -388,19 +402,21 @@
     ctx.restore();
   }
 
-  function createDrone(planetIndex) {
+  function createDrone(planetIndex, options = {}) {
     const p = planets[planetIndex];
-    const ang = rand() * Math.PI * 2;
-    const orbit = p.r + 130 + rand() * 160;
+    if (!p) return null;
+    const ang = options.angle !== undefined ? options.angle : rand() * Math.PI * 2;
+    const orbit = options.orbit !== undefined ? options.orbit : p.r + 130 + rand() * 160;
     return {
       planetIndex,
       orbit,
+      spawnAngle: ang,
       x: p.x + Math.cos(ang) * orbit,
       y: p.y + Math.sin(ang) * orbit,
       vx: 0,
       vy: 0,
       r: Math.max(14, Math.min(18, p.r * 0.08 + 12)),
-      fireCooldown: 1 + rand() * 1.6,
+      fireCooldown: options.fireCooldown !== undefined ? options.fireCooldown : 1 + rand() * 1.6,
       health: 3,
       hitTimer: 0,
       sparkle: rand() * Math.PI * 2,
@@ -439,6 +455,17 @@
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  function rebuildDrones() {
+    drones.length = 0;
+    for (const blueprint of droneBlueprints) {
+      const d = createDrone(blueprint.planetIndex, {
+        angle: blueprint.angle,
+        orbit: blueprint.orbit,
+      });
+      if (d) drones.push(d);
+    }
   }
 
   function drawEnemyShot(ctx, shot) {
@@ -592,6 +619,14 @@
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
     ctx.fillText('Isı', x0, y0 - 2);
+    if (overheated) {
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#f59f9f';
+      ctx.fillText('Aşırı ısınma!', x0 + w, y0 + h + 2);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+    }
   }
 
   function drawShieldOverlay() {
@@ -623,8 +658,17 @@
   }
 
   function tryShoot() {
-    if (heat >= 1) return; // overheated
+    if (shipDestroyed || overheated) return;
+    if (heat >= 1) {
+      overheated = true;
+      overheatTimer = overheatDuration;
+      return;
+    }
     heat = Math.min(1, heat + heatPerShot);
+    if (heat >= 1) {
+      overheated = true;
+      overheatTimer = overheatDuration;
+    }
     beamFlash = 0.08;
     const dx = Math.cos(ship.angle), dy = Math.sin(ship.angle);
     const destroyed = [];
@@ -716,21 +760,157 @@
     return true;
   }
 
+  function spawnExplosion(x, y) {
+    for (let i = 0; i < 46; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const speed = 90 + Math.random() * 180;
+      const hueShift = Math.random();
+      explosionParticles.push({
+        x,
+        y,
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        life: 0.9 + Math.random() * 0.7,
+        maxLife: 0.9 + Math.random() * 0.7,
+        color: hueShift < 0.5 ? 'rgba(255,176,96,1)' : 'rgba(120,200,255,1)',
+        size: 2 + Math.random() * 3.5,
+      });
+    }
+  }
+
+  function updateExplosionParticles(dt) {
+    for (let i = explosionParticles.length - 1; i >= 0; i--) {
+      const p = explosionParticles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.9;
+      p.vy *= 0.9;
+      p.life -= dt;
+      if (p.life <= 0) explosionParticles.splice(i, 1);
+    }
+  }
+
+  function drawExplosionParticles(ctx) {
+    if (!explosionParticles.length) return;
+    ctx.save();
+    for (const p of explosionParticles) {
+      const t = Math.max(0, p.life / p.maxLife);
+      ctx.globalAlpha = Math.pow(t, 1.5);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function randomizeShipSpawn() {
+    let attempts = 0;
+    while (attempts++ < 60) {
+      const base = planets[Math.floor(Math.random() * planets.length)];
+      if (!base) continue;
+      const angle = Math.random() * Math.PI * 2;
+      const dist = base.r + 200 + Math.random() * 260;
+      const x = base.x + Math.cos(angle) * dist;
+      const y = base.y + Math.sin(angle) * dist;
+      let safe = true;
+      for (const p of planets) {
+        const pd = Math.hypot(x - p.x, y - p.y);
+        if (pd < p.r + 50) { safe = false; break; }
+      }
+      if (safe) {
+        ship.x = x;
+        ship.y = y;
+        ship.vx = 0;
+        ship.vy = 0;
+        ship.angle = angle + Math.PI;
+        return;
+      }
+    }
+    const fallback = planets[0];
+    ship.x = fallback.x + fallback.r + 160;
+    ship.y = fallback.y;
+    ship.vx = 0;
+    ship.vy = 0;
+    ship.angle = Math.PI;
+  }
+
+  function destroyShip() {
+    if (shipDestroyed) return;
+    shipDestroyed = true;
+    respawnTimer = respawnDelay;
+    spawnExplosion(ship.x, ship.y);
+    heat = 0;
+    overheated = false;
+    overheatTimer = 0;
+    beamFlash = 0;
+    ship.vx = 0;
+    ship.vy = 0;
+    state = STATE.SPACE;
+    currentPlanet = -1;
+    camera.x = ship.x;
+    camera.y = ship.y;
+    menuOpen = false;
+    if (menu) menu.classList.add('hidden');
+  }
+
+  function restartGame() {
+    shipDestroyed = false;
+    respawnTimer = 0;
+    explosionParticles.length = 0;
+    randomizeShipSpawn();
+    ship.vx = 0;
+    ship.vy = 0;
+    heat = 0;
+    overheated = false;
+    overheatTimer = 0;
+    beamFlash = 0;
+    shield = 1;
+    shieldCooldown = 0;
+    shieldHitTimer = 0;
+    cargoDropTimer = 0;
+    cameraShake = 0;
+    inventory.fill(null);
+    loot.length = 0;
+    asteroids.length = 0;
+    enemyShots.length = 0;
+    asteroidSpawnTimer = 0;
+    trailPoints.length = 0;
+    visited.clear();
+    for (let i = 0; i < surfaces.length; i++) surfaces[i] = null;
+    unlockedShipColors.clear();
+    unlockedShipColors.add('white');
+    unlockedSuitColors.clear();
+    unlockedSuitColors.add('white');
+    shipColorId = 'white';
+    suitColorId = 'white';
+    state = STATE.SPACE;
+    currentPlanet = -1;
+    astro.planetIndex = 0;
+    astro.x = 0;
+    astro.y = 0;
+    camera.x = ship.x;
+    camera.y = ship.y;
+    camera.zoom = 1;
+    keys.clear();
+    heldVirtual.clear();
+    rebuildDrones();
+    menuOpen = false;
+    if (menu) menu.classList.add('hidden');
+    renderMenuIfOpen();
+  }
+
   function applyShipDamage(amount, impulseX = 0, impulseY = 0) {
-    const prevShield = shield;
+    if (shipDestroyed) return;
     shield = Math.max(0, shield - amount);
     shieldHitTimer = 0.4;
     shieldCooldown = shieldRechargeDelay;
     cameraShake = Math.min(1.4, cameraShake + amount * 1.3);
     ship.vx += impulseX;
     ship.vy += impulseY;
-    if (shield <= 0 && cargoDropTimer <= 0) {
-      if (dropRandomCargo()) {
-        cargoDropTimer = 1.8;
-        renderMenuIfOpen();
-      }
+    if (shield <= 0) {
+      destroyShip();
     }
-    if (shield <= 0 && prevShield > 0) cargoDropTimer = 0; // immediate drop once depleted
   }
 
   let asteroidSpawnTimer = 0;
@@ -1180,7 +1360,16 @@
     }
     cameraShake = Math.max(0, cameraShake - dt * 1.8);
     beamFlash = Math.max(0, beamFlash - dt);
-    heat = Math.max(0, heat - heatCoolRate * dt);
+    if (overheated) {
+      overheatTimer -= dt;
+      heat = Math.max(0, Math.min(1, overheatTimer / overheatDuration));
+      if (overheatTimer <= 0) {
+        overheated = false;
+        heat = 0;
+      }
+    } else {
+      heat = Math.max(0, heat - heatCoolRate * dt);
+    }
     if (menuOpen) {
       for (let i = trailPoints.length - 1; i >= 0; i--) {
         trailPoints[i].life -= dt;
@@ -1215,6 +1404,24 @@
   }
 
   function updateSpace(dt) {
+    if (shipDestroyed) {
+      respawnTimer -= dt;
+      updateExplosionParticles(dt);
+      for (let i = trailPoints.length - 1; i >= 0; i--) {
+        trailPoints[i].life -= dt;
+        if (trailPoints[i].life <= 0) trailPoints.splice(i, 1);
+      }
+      const speedText = length(ship.vx, ship.vy).toFixed(2);
+      hud.textContent = `MOD: UZAY\nHız: ${speedText}\nKalkan: %0`;
+      const remain = Math.max(0, respawnTimer);
+      const countdown = remain > 0 ? `${remain.toFixed(1)} sn` : 'Anında';
+      hint.textContent = `Gemi patladı!\nYeniden başlatma: ${countdown}`;
+      if (respawnTimer <= 0) {
+        restartGame();
+      }
+      return;
+    }
+
     const thrust = (keys.has('w') || keys.has('arrowup')) ? 140 : 0;
     const turnLeft = keys.has('a') || keys.has('arrowleft');
     const turnRight = keys.has('d') || keys.has('arrowright');
@@ -1349,9 +1556,11 @@
       }
     }
 
+    updateExplosionParticles(dt);
+
     // Landing check
     currentPlanet = -1;
-    let landingMsg = '';
+    let landingHint = '';
     for (let i = 0; i < planets.length; i++) {
       const p = planets[i];
       const dx = ship.x - p.x;
@@ -1360,7 +1569,7 @@
       const altitude = dist - p.r;
       const speed = length(ship.vx, ship.vy);
       if (altitude < 40) {
-        landingMsg = `İniş penceresi: ${p.name}\n- Hız < 0.6 olmalı\n- L ile inmeyi dene`;
+        landingHint = `L: ${p.name} yüzeyine in (Hız < 0.6)`;
         currentPlanet = i;
         if (keys.has('l') && speed < 0.6) {
           // Prepare surface and place astronaut
@@ -1382,14 +1591,14 @@
     const speed = length(ship.vx, ship.vy).toFixed(2);
     const shieldPct = Math.round(shield * 100);
     hud.textContent = `MOD: UZAY\nHız: ${speed}\nKalkan: %${shieldPct}`;
-    hint.innerHTML = [
-      'W/A/S/D veya Yön Tuşları: Uçuş',
-      'S: Fren, L: İniş (yakın + yavaş)',
-      'E: Maden çek/topla',
-      drones.length ? 'Dronlar kalkanını düşürür, lazerle yok et' : '',
-      'M: Menü',
-      landingMsg,
-    ].filter(Boolean).join('\n');
+    const droneNearby = drones.some((d) => Math.hypot(d.x - ship.x, d.y - ship.y) < 380);
+    const lootNearby = loot.some((l) => !l.gone && Math.hypot(l.x - ship.x, l.y - ship.y) < 110);
+    const hints = ['W/A/S/D veya Yön Tuşları: Uçuş'];
+    if (landingHint) hints.push(landingHint);
+    if (lootNearby) hints.push('E: Yakın madenleri topla');
+    if (droneNearby) hints.push('Boşluk: Lazerle ateş et');
+    if (overheated) hints.push('Silah soğuyor, bekle');
+    hint.textContent = hints.join('\n');
   }
 
   function drawSpace() {
@@ -1453,9 +1662,12 @@
       ctx.restore();
     }
 
-    // Ship
-    drawShip(ctx, ship.x, ship.y, ship.angle);
-    drawShieldAura(ctx);
+    // Ship / patlama
+    if (!shipDestroyed) {
+      drawShip(ctx, ship.x, ship.y, ship.angle);
+      drawShieldAura(ctx);
+    }
+    drawExplosionParticles(ctx);
 
     // Approach marker on current planet
     if (currentPlanet >= 0) {
@@ -1476,6 +1688,10 @@
   }
 
   function updatePlanet(dt) {
+    if (shipDestroyed) {
+      state = STATE.SPACE;
+      return;
+    }
     const p = planets[astro.planetIndex];
     const surf = ensureSurface(astro.planetIndex);
     updateDrones(dt);
@@ -1572,12 +1788,10 @@
 
     // HUD/hints
     hud.textContent = `MOD: GEZEGEN (${p.name}) | Habitat: ${surf.habitat}\nKalkan: %${Math.round(shield * 100)}`;
-    hint.innerHTML = [
-      'W/A/S/D: Yürü',
-      pickupMsg || 'E: Etkileşim',
-      'L: Kalkış',
-      'M: Menü',
-    ].filter(Boolean).join('\n');
+    const planetHints = ['W/A/S/D: Yürü'];
+    if (pickupMsg) planetHints.push(pickupMsg);
+    planetHints.push('L: Kalkış');
+    hint.textContent = planetHints.join('\n');
   }
 
   function drawPlanetMode() {
@@ -1650,6 +1864,55 @@
     return shipColors.find(c => c.id === id) || suitColors.find(c => c.id === id) || shipColors[0];
   }
 
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatItemLabel(it) {
+    if (!it) return '';
+    if (it.type === 'ore') {
+      const mineral = minerals.find((m) => m.id === it.id);
+      const name = mineral ? mineral.name : (it.name || it.id);
+      return `${name}${it.qty > 1 ? ` x${it.qty}` : ''}`;
+    }
+    if (it.type === 'artifact') {
+      const label = it.name || 'Artefakt';
+      return `${label}${it.qty > 1 ? ` x${it.qty}` : ''}`;
+    }
+    return String(it);
+  }
+
+  function resolveItemColor(it) {
+    if (it && it.color) return it.color;
+    if (it && it.type === 'ore') {
+      const mineral = minerals.find((m) => m.id === it.id);
+      if (mineral) return mineral.color;
+    }
+    if (it && it.type === 'artifact') return '#c8a5ff';
+    return '#9fa9ff';
+  }
+
+  function itemIconHtml(it) {
+    if (!it) return '<div class="item-icon empty"></div>';
+    const color = resolveItemColor(it);
+    const shape = it.type === 'artifact' ? 'artifact' : 'ore';
+    const qty = it.qty > 1 ? `<span class="item-qty">x${it.qty}</span>` : '';
+    return `<div class="item-icon ${shape}" style="--item-color:${color}"><span class="item-shine"></span>${qty}</div>`;
+  }
+
+  function inventorySlotHtml(it) {
+    if (!it) {
+      return '<div class="slot empty" title="Boş"><div class="item-icon empty"></div><div class="slot-label muted">Boş</div></div>';
+    }
+    const label = escapeHtml(formatItemLabel(it));
+    return `<div class="slot has-item" title="${label}">${itemIconHtml(it)}<div class="slot-label">${label}</div></div>`;
+  }
+
   function renderMenuIfOpen() { if (menuOpen) renderMenu(); }
 
   function renderMenu() {
@@ -1657,18 +1920,7 @@
     const inSpace = state === STATE.SPACE;
     const title = inSpace ? 'Uzay – Gemi' : 'Gezegen – Astronot';
     // Inventory grid with item labels
-    function itemLabel(it){
-      if (!it) return '&nbsp;';
-      if (it.type === 'ore') { const m = minerals.find(x=>x.id===it.id); return `${m?m.name:it.id} x${it.qty}`; }
-      if (it.type === 'artifact') {
-        const label = it.name || 'Artefakt';
-        return `${label}${it.qty > 1 ? ' x' + it.qty : ''}`;
-      }
-      return String(it);
-    }
-    const invHtml = '<div class="inventory">' + inventory.map((it, idx) => `
-      <div class="slot" title="${it ? itemLabel(it) : 'Boş'}">${itemLabel(it)}</div>
-    `).join('') + '</div>';
+    const invHtml = '<div class="inventory">' + inventory.map(inventorySlotHtml).join('') + '</div>';
 
     function swatchesHtml(list, unlockedSet, selectedId, type) {
       return '<div class="swatches">' + list.map(col => {
@@ -1751,6 +2003,8 @@
       menuOpen = false; menu.classList.add('hidden'); e.preventDefault();
     }
   });
+
+  restartGame();
 
   // Start loop
   requestAnimationFrame((t) => { last = t; step(t); });
